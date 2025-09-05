@@ -1,602 +1,59 @@
+"""
+基金组合回测工具 - 主应用文件
+重构后的版本，专注于UI布局和回调函数
+"""
+
 import dash
 from dash import dcc, html, Input, Output, State, ALL
 import pandas as pd
 import plotly.graph_objs as go
 import os
 import uuid
-import subprocess
 import sys
-import tempfile
-import json
+
+# 导入模块化组件
+from modules.config import COLORS, INPUT_STYLE, CSS_STYLES, PRIMARY_BUTTON_STYLE
+from modules.data_handler import (
+    get_available_data_files, get_available_scripts, 
+    execute_custom_script, save_fund_data_individually
+)
+from modules.analytics import (
+    align_time_series_data, calculate_investment_metrics, 
+    create_analytics_table
+)
+from modules.ui_components import (
+    create_fund_entry, create_portfolio_card, create_header_section,
+    create_controls_section, create_chart_section
+)
+
+# 简单的日志函数，避免编码问题
+def safe_print(*args):
+    """安全的打印函数，避免Windows编码问题"""
+    try:
+        # 只在开发模式下输出，并且转换为简单的ASCII
+        if __debug__:
+            message = ' '.join(str(arg) for arg in args)
+            # 移除可能有问题的字符
+            safe_message = ''.join(c if ord(c) < 128 else '?' for c in message)
+            safe_print(safe_message[:200])  # 限制长度
+    except:
+        pass  # 完全忽略打印错误
 
 # --- App Initialization ---
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "基金组合回测"
 
-# --- Modern UI Styles ---
-COLORS = {
-    'primary': '#2E86C1',      # 主要蓝色
-    'secondary': '#5DADE2',    # 次要蓝色
-    'success': '#58D68D',      # 成功绿色
-    'danger': '#EC7063',       # 危险红色
-    'warning': '#F7DC6F',      # 警告黄色
-    'light': '#F8F9FA',        # 浅色背景
-    'dark': '#2C3E50',         # 深色文字
-    'white': '#FFFFFF',        # 白色
-    'border': '#E5E8E8',       # 边框色
-    'shadow': 'rgba(0,0,0,0.1)' # 阴影色
-}
-
-BUTTON_STYLE = {
-    'borderRadius': '8px',
-    'border': 'none',
-    'padding': '10px 20px',
-    'fontWeight': '600',
-    'fontSize': '14px',
-    'cursor': 'pointer',
-    'transition': 'all 0.3s ease',
-    'boxShadow': f'0 2px 4px {COLORS["shadow"]}',
-    'fontFamily': '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif'
-}
-
-PRIMARY_BUTTON_STYLE = {
-    **BUTTON_STYLE,
-    'backgroundColor': COLORS['primary'],
-    'color': COLORS['white']
-}
-
-DANGER_BUTTON_STYLE = {
-    **BUTTON_STYLE,
-    'backgroundColor': COLORS['danger'],
-    'color': COLORS['white'],
-    'padding': '6px 12px',
-    'fontSize': '12px'
-}
-
-INPUT_STYLE = {
-    'borderRadius': '6px',
-    'border': f'2px solid {COLORS["border"]}',
-    'padding': '8px 12px',
-    'fontSize': '15px',
-    'fontFamily': '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif',
-    'transition': 'border-color 0.3s ease',
-    'outline': 'none',
-    'height': '38px',
-    'boxSizing': 'border-box'
-}
-
-DROPDOWN_STYLE = {
-    'fontSize': '16px',
-    'fontFamily': '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif'
-}
-
-CARD_STYLE = {
-    'backgroundColor': COLORS['white'],
-    'borderRadius': '12px',
-    'padding': '24px',
-    'marginBottom': '20px',
-    'boxShadow': f'0 4px 12px {COLORS["shadow"]}',
-    'border': f'1px solid {COLORS["border"]}',
-    'transition': 'transform 0.2s ease, box-shadow 0.2s ease'
-}
-
-# --- Helper Functions ---
-def get_available_data_files():
-    """Scans the directory for available data files (CSV)."""
-    try:
-        return [f for f in os.listdir('.') if f.endswith('.csv')]
-    except FileNotFoundError:
-        return []
-
-def execute_custom_script(script_name, fund_code):
-    """
-    执行自定义脚本获取基金数据
-    :param script_name: 脚本名称（不含扩展名）
-    :param fund_code: 基金代码
-    :return: DataFrame 或 None
-    """
-    try:
-        # 构建脚本路径
-        script_path = f"{script_name}.py"
-        if not os.path.exists(script_path):
-            print(f"脚本文件 {script_path} 不存在")
-            return None
-        
-
-        # 执行脚本，优先用 utf-8，失败时自动回退 gbk
-        cmd = [sys.executable, script_path, str(fund_code)]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding='utf-8')
-        except UnicodeDecodeError:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, encoding='gbk')
-
-        if result.returncode == 0:
-            # 解析CSV数据
-            from io import StringIO
-            csv_data = result.stdout.strip()
-            if csv_data:
-                try:
-                    df = pd.read_csv(StringIO(csv_data))
-                    print(f"脚本 {script_name} 执行成功，获得 {len(df)} 条数据")
-                    return df
-                except Exception as e:
-                    print(f"CSV解析失败: {e}")
-                    return None
-            else:
-                print(f"脚本 {script_name} 返回空数据")
-                return None
-        else:
-            print(f"脚本执行失败: {result.stderr}")
-            return None
-            
-    except subprocess.TimeoutExpired:
-        print(f"脚本 {script_name} 执行超时")
-        return None
-    except Exception as e:
-        print(f"执行脚本时出错: {e}")
-        return None
-
-def get_available_scripts():
-    """获取可用的自定义脚本"""
-    try:
-        scripts = []
-        for f in os.listdir('.'):
-            if f.endswith('.py') and f != 'overlay.py' and f != '__pycache__':
-                # 去掉扩展名
-                script_name = f[:-3]
-                scripts.append(script_name)
-        return scripts
-    except FileNotFoundError:
-        return []
-
-def save_fund_data_individually(portfolios):
-    """
-    按条目分开保存基金数据到本地CSV文件，便于后续重新组合
-    :param portfolios: 组合数据字典
-    :return: 保存状态信息
-    """
-    saved_files = []
-    errors = []
-    
-    # 按条目遍历所有基金数据
-    for p_id, p_data in portfolios.items():
-        portfolio_name = p_data.get('name', f'组合_{p_id[:8]}')
-        
-        for fund_id, fund_data in p_data['funds'].items():
-            fund_name = fund_data.get('fund-name', f'基金_{fund_id[:8]}')
-            data_source = fund_data.get('fund-data')
-            fund_code = fund_data.get('fund-code')
-            fund_share = fund_data.get('fund-share', 0)
-            
-            if not data_source:
-                continue
-                
-            df = None
-            source_info = ""
-            
-            try:
-                # 处理脚本数据源
-                if data_source.startswith('script:'):
-                    script_name = data_source[7:]
-                    if fund_code:
-                        print(f"正在获取数据：{fund_name} ({fund_code})")
-                        df = execute_custom_script(script_name, fund_code)
-                        source_info = f"{script_name}_{fund_code}"
-                    else:
-                        continue
-                        
-                # 处理CSV文件数据源
-                elif os.path.exists(data_source):
-                    print(f"正在复制数据：{fund_name} (来源: {data_source})")
-                    df = pd.read_csv(data_source)
-                    source_info = f"文件_{os.path.splitext(os.path.basename(data_source))[0]}"
-                
-                if df is not None and not df.empty:
-                    # 生成更清晰的文件名，不包含组合信息
-                    timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-                    safe_fund_name = "".join(c for c in fund_name if c.isalnum() or c in (' ', '-', '_')).strip()
-                    
-                    # 新的命名方式：基金数据_[基金名称]_[数据源]_[时间戳]
-                    if fund_code:
-                        filename = f"基金数据_{safe_fund_name}_{fund_code}_{timestamp}.csv"
-                    else:
-                        filename = f"基金数据_{safe_fund_name}_{source_info}_{timestamp}.csv"
-                    
-                    # 确保数据格式标准化
-                    if 'time' in df.columns:
-                        # 已经是标准格式
-                        standardized_df = df.copy()
-                    elif 'FSRQ' in df.columns and 'DWJZ' in df.columns:
-                        # 转换为标准格式
-                        standardized_df = df.rename(columns={'FSRQ': 'time', 'DWJZ': 'nav'})
-                        standardized_df = standardized_df[['time', 'nav']]
-                    else:
-                        # 尝试猜测列名
-                        time_col = next((col for col in df.columns if 'time' in col.lower() or 'date' in col.lower()), None)
-                        value_col = next((col for col in df.columns if col != time_col and df[col].dtype in ['float64', 'int64']), None)
-                        if time_col and value_col:
-                            standardized_df = df[[time_col, value_col]].copy()
-                            standardized_df.columns = ['time', 'nav']
-                        else:
-                            standardized_df = df.copy()
-                    
-                    # 保存文件
-                    standardized_df.to_csv(filename, index=False, encoding='utf-8-sig')
-                    
-                    saved_files.append({
-                        'filename': filename,
-                        'fund_name': fund_name,
-                        'fund_code': fund_code or 'N/A',
-                        'source': source_info,
-                        'share': fund_share,
-                        'from_portfolio': portfolio_name,
-                        'rows': len(standardized_df)
-                    })
-                    
-            except Exception as e:
-                errors.append(f"{fund_name} ({fund_code or 'N/A'}): {str(e)}")
-    
-    return saved_files, errors
-
-def align_time_series_data(fund_dfs, portfolio_name):
-    """
-    统一组合中所有基金的时间区间，以最晚开始时间为准
-    :param fund_dfs: 基金数据列表
-    :param portfolio_name: 组合名称
-    :return: 对齐后的基金数据列表和时间统计信息
-    """
-    if not fund_dfs:
-        return fund_dfs, None
-    
-    # 收集所有基金的时间范围信息
-    time_info = []
-    for fund in fund_dfs:
-        df = fund['df']
-        if not df.empty:
-            start_time = df.index.min()
-            end_time = df.index.max()
-            fund_id = df.columns[0]
-            time_info.append({
-                'fund_id': fund_id,
-                'start_time': start_time,
-                'end_time': end_time,
-                'data_points': len(df)
-            })
-    
-    if not time_info:
-        return fund_dfs, None
-    
-    # 找到最晚的开始时间
-    latest_start = max(info['start_time'] for info in time_info)
-    earliest_end = min(info['end_time'] for info in time_info)
-    
-    # 检查是否需要对齐
-    needs_alignment = any(info['start_time'] < latest_start for info in time_info)
-    
-    if needs_alignment:
-        try:
-            print(f"组合 '{portfolio_name}' 检测到时间不统一，正在对齐到最晚开始时间: {latest_start.strftime('%Y-%m-%d')}")
-        except Exception:
-            pass
-        
-        # 对齐所有基金数据到统一时间区间
-        aligned_fund_dfs = []
-        for fund in fund_dfs:
-            df = fund['df']
-            if not df.empty:
-                # 截取到统一的时间区间
-                aligned_df = df[df.index >= latest_start]
-                if not aligned_df.empty:
-                    # 重新归一化（基于新的起始点）
-                    fund_id = aligned_df.columns[0]
-                    first_value = aligned_df[fund_id].iloc[0]
-                    if first_value != 0:
-                        aligned_df[fund_id] = aligned_df[fund_id] / first_value
-                    
-                    aligned_fund_dfs.append({
-                        'df': aligned_df,
-                        'share': fund['share']
-                    })
-                    
-                    original_points = len(df)
-                    aligned_points = len(aligned_df)
-                    try:
-                        print(f"{fund_id}: {original_points} -> {aligned_points} 个数据点")
-                    except Exception:
-                        pass
-        
-        time_stats = {
-            'aligned': True,
-            'latest_start': latest_start,
-            'earliest_end': earliest_end,
-            'original_count': len(fund_dfs),
-            'aligned_count': len(aligned_fund_dfs)
-        }
-        
-        return aligned_fund_dfs, time_stats
-    else:
-        try:
-            print(f"组合 '{portfolio_name}' 时间区间已统一，无需对齐")
-        except Exception:
-            pass
-        time_stats = {
-            'aligned': False,
-            'latest_start': latest_start,
-            'earliest_end': earliest_end,
-            'original_count': len(fund_dfs),
-            'aligned_count': len(fund_dfs)
-        }
-        return fund_dfs, time_stats
-
-def calculate_investment_metrics(nav_series, portfolio_name):
-    """
-    计算投资组合的关键指标
-    :param nav_series: 净值序列 (pandas Series)
-    :param portfolio_name: 组合名称
-    :return: 投资指标字典
-    """
-    try:
-        print(f"开始计算 {portfolio_name} 的投资指标")
-    except Exception:
-        pass
-    
-    if nav_series.empty or len(nav_series) < 2:
-        try:
-            print(f"{portfolio_name}: 数据不足，需要至少2个数据点")
-        except Exception:
-            pass
-        return None
-    
-    # 检查是否有NaN值
-    if nav_series.isnull().any():
-        try:
-            print(f"{portfolio_name}: 发现NaN值，进行清理")
-        except Exception:
-            pass
-        nav_series = nav_series.dropna()
-        if len(nav_series) < 2:
-            try:
-                print(f"{portfolio_name}: 清理NaN后数据不足")
-            except Exception:
-                pass
-            return None
-    
-    # 计算日收益率
-    returns = nav_series.pct_change().dropna()
-    
-    if returns.empty:
-        try:
-            print(f"{portfolio_name}: 无法计算收益率")
-        except Exception:
-            pass
-        return None
-    
-    try:
-        print(f"{portfolio_name}: 数据点={len(nav_series)}, 收益率点={len(returns)}")
-    except Exception:
-        pass
-    
-    # 时间范围
-    start_date = nav_series.index[0]
-    end_date = nav_series.index[-1]
-    days = (end_date - start_date).days
-    years = days / 365.25
-    
-    # 基础指标
-    total_return = (nav_series.iloc[-1] / nav_series.iloc[0] - 1) * 100
-    
-    # 年化收益率
-    if years > 0:
-        annualized_return = ((nav_series.iloc[-1] / nav_series.iloc[0]) ** (1/years) - 1) * 100
-    else:
-        annualized_return = 0
-    
-    # 波动率 (年化)
-    volatility = returns.std() * (252 ** 0.5) * 100  # 假设252个交易日/年
-    
-    # 最大回撤
-    cumulative = nav_series / nav_series.cummax()
-    max_drawdown = (cumulative.min() - 1) * 100
-    
-    # 夏普比率 (假设无风险利率为3%)
-    risk_free_rate = 0.03
-    if volatility > 0:
-        sharpe_ratio = (annualized_return / 100 - risk_free_rate) / (volatility / 100)
-        try:
-            print(sharpe_ratio)
-        except Exception:
-            pass
-    else:
-        sharpe_ratio = 0
-    
-    # Calmar比率 (年化收益率 / 最大回撤绝对值)
-    if max_drawdown < 0:
-        calmar_ratio = (annualized_return / 100) / abs(max_drawdown / 100)
-    else:
-        calmar_ratio = 0
-    
-    # 胜率 (正收益交易日占比)
-    win_rate = (returns > 0).sum() / len(returns) * 100
-    
-    # 最大连续下跌天数
-    nav_changes = nav_series.diff()
-    consecutive_down = 0
-    max_consecutive_down = 0
-    for change in nav_changes:
-        if pd.isna(change):
-            continue
-        if change < 0:
-            consecutive_down += 1
-            max_consecutive_down = max(max_consecutive_down, consecutive_down)
-        else:
-            consecutive_down = 0
-    
-    # VAR (95%置信度的在险价值)
-    var_95 = returns.quantile(0.05) * 100
-    
-    metrics = {
-        'portfolio_name': portfolio_name,
-        'start_date': start_date.strftime('%Y-%m-%d'),
-        'end_date': end_date.strftime('%Y-%m-%d'),
-        'days': days,
-        'total_return': round(total_return, 2),
-        'annualized_return': round(annualized_return, 2),
-        'volatility': round(volatility, 2),
-        'max_drawdown': round(max_drawdown, 2),
-        'sharpe_ratio': round(sharpe_ratio, 3),
-        'calmar_ratio': round(calmar_ratio, 3),
-        'win_rate': round(win_rate, 2),
-        'max_consecutive_down': max_consecutive_down,
-        'var_95': round(var_95, 2),
-        'final_nav': round(nav_series.iloc[-1], 4)
-    }
-    
-    try:
-        print(f"{portfolio_name}: 计算完成，总收益={total_return:.2f}%, 年化收益={annualized_return:.2f}%")
-    except Exception:
-        pass
-    return metrics
-
-def create_analytics_table(metrics_list):
-    """
-    创建投资分析数据表
-    :param metrics_list: 投资指标列表
-    :return: HTML表格组件
-    """
-    try:
-        print(f"create_analytics_table 接收到 {len(metrics_list) if metrics_list else 0} 个指标数据")
-    except Exception:
-        pass
-    
-    if not metrics_list:
-        try:
-            print("metrics_list 为空，返回暂无数据提示")
-        except Exception:
-            pass
-        return html.Div("暂无数据", style={'textAlign': 'center', 'color': COLORS['secondary']})
-    
-    # 详细打印每个指标数据
-    for i, metrics in enumerate(metrics_list):
-        try:
-            print(f"指标数据 {i+1}: 组合名={metrics.get('portfolio_name', 'N/A')}, 总收益={metrics.get('total_return', 'N/A')}%")
-        except Exception:
-            pass
-    
-    # 表头
-    header = html.Thead([
-        html.Tr([
-            html.Th("组合名称", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("期间", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("总收益率", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("年化收益率", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("年化波动率", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("最大回撤", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("夏普比率", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("Calmar比率", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("胜率", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'}),
-            html.Th("VaR(95%)", style={'padding': '12px', 'backgroundColor': COLORS['primary'], 'color': 'white', 'border': 'none', 'textAlign': 'center'})
-        ])
-    ])
-    
-    # 表格行
-    rows = []
-    for i, metrics in enumerate(metrics_list):
-        # 根据指标好坏设置颜色
-        return_color = COLORS['success'] if metrics['total_return'] > 0 else COLORS['danger']
-        sharpe_color = COLORS['success'] if metrics['sharpe_ratio'] > 1 else (COLORS['warning'] if metrics['sharpe_ratio'] > 0.5 else COLORS['danger'])
-        drawdown_color = COLORS['success'] if metrics['max_drawdown'] > -10 else (COLORS['warning'] if metrics['max_drawdown'] > -20 else COLORS['danger'])
-
-        row_style = {'backgroundColor': COLORS['light'] if i % 2 == 0 else COLORS['white'], 'textAlign': 'center'}
-
-        row = html.Tr([
-            html.Td(metrics['portfolio_name'], style={'padding': '10px', 'fontWeight': '600', **row_style}),
-            html.Td(f"{metrics['start_date']} 至 {metrics['end_date']} ({metrics['days']}天)", 
-                style={'padding': '10px', 'fontSize': '12px', **row_style}),
-            html.Td(f"{metrics['total_return']:+.2f}%", 
-                style={'padding': '10px', 'color': return_color, 'fontWeight': '600', **row_style}),
-            html.Td(f"{metrics['annualized_return']:+.2f}%", 
-                style={'padding': '10px', 'color': return_color, 'fontWeight': '600', **row_style}),
-            html.Td(f"{metrics['volatility']:.2f}%", 
-                style={'padding': '10px', **row_style}),
-            html.Td(f"{metrics['max_drawdown']:.2f}%", 
-                style={'padding': '10px', 'color': drawdown_color, 'fontWeight': '600', **row_style}),
-            html.Td(f"{metrics['sharpe_ratio']:.3f}", 
-                style={'padding': '10px', 'color': sharpe_color, 'fontWeight': '600', **row_style}),
-            html.Td(f"{metrics['calmar_ratio']:.3f}", 
-                style={'padding': '10px', **row_style}),
-            html.Td(f"{metrics['win_rate']:.1f}%", 
-                style={'padding': '10px', **row_style}),
-            html.Td(f"{metrics['var_95']:.2f}%", 
-                style={'padding': '10px', **row_style})
-        ])
-        rows.append(row)
-    
-    table = html.Table([header, html.Tbody(rows)], style={
-        'width': '100%',
-        'borderCollapse': 'collapse',
-        'boxShadow': f'0 2px 8px {COLORS["shadow"]}',
-        'borderRadius': '8px',
-        'overflow': 'hidden'
-    })
-    
-    # 添加指标说明
-    legend = html.Div([
-        html.H4("📊 指标说明", style={'color': COLORS['dark'], 'marginTop': '20px', 'marginBottom': '10px'}),
-        html.Ul([
-            html.Li("夏普比率：>1优秀，0.5-1良好，<0.5需改进", style={'margin': '5px 0'}),
-            html.Li("最大回撤：<-10%警戒，<-20%高风险", style={'margin': '5px 0'}),
-            html.Li("Calmar比率：年化收益率与最大回撤比值，越高越好", style={'margin': '5px 0'}),
-            html.Li("VaR(95%)：95%置信度下的最大可能单日损失", style={'margin': '5px 0'})
-        ], style={'fontSize': '12px', 'color': COLORS['secondary'], 'paddingLeft': '20px'})
-    ])
-    
-    try:
-        print(f"create_analytics_table 返回完整表格组件，包含 {len(metrics_list)} 个组合的数据")
-    except Exception:
-        pass
-    return html.Div([table, legend])
-
-# --- App Layout ---
 # Create initial base portfolio that cannot be deleted
 initial_portfolio_id = 'base-portfolio'
 initial_fund_id = str(uuid.uuid4())
 
+# --- App Layout ---
 app.layout = html.Div([
     # --- Header Section ---
-    html.Div([
-        html.H1("📊 基金组合回测工具", style={
-            'textAlign': 'center',
-            'color': COLORS['dark'],
-            'marginBottom': '10px',
-            'fontSize': '2.5rem',
-            'fontWeight': '700',
-            'fontFamily': '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif'
-        }),
-        html.P("智能化投资组合分析与回测平台", style={
-            'textAlign': 'center',
-            'color': COLORS['secondary'],
-            'fontSize': '1.1rem',
-            'marginBottom': '30px',
-            'fontFamily': '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif'
-        })
-    ], style={
-        'background': f'linear-gradient(135deg, {COLORS["light"]} 0%, {COLORS["white"]} 100%)',
-        'padding': '40px 20px',
-        'marginBottom': '30px',
-        'borderRadius': '0 0 20px 20px',
-        'boxShadow': f'0 4px 20px {COLORS["shadow"]}'
-    }),
+    create_header_section(),
 
     # --- Controls Section ---
-    html.Div([
-        html.Button('➕ 添加新组合', 
-                   id='add-portfolio-btn', 
-                   n_clicks=0, 
-                   style={**PRIMARY_BUTTON_STYLE, 'marginBottom': '20px'})
-    ], style={
-        'textAlign': 'center',
-        'marginBottom': '30px'
-    }),
+    create_controls_section(),
 
     # --- Portfolios Container ---
     html.Div(id='portfolios-container', children=[
@@ -620,113 +77,37 @@ app.layout = html.Div([
                 ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '20px'}),
             ]),
             html.Div([], id={'type': 'funds-container', 'portfolio_id': initial_portfolio_id}),
-            html.Button('➕ 添加基金', 
-                       id={'type': 'add-fund-btn', 'portfolio_id': initial_portfolio_id}, 
-                       n_clicks=0, 
-                       style={**PRIMARY_BUTTON_STYLE, 'marginTop': '15px'}),
-            html.Div(id={'type': 'share-feedback', 'portfolio_id': initial_portfolio_id}, 
-                    style={
-                        'color': COLORS['danger'], 
-                        'marginTop': '10px', 
-                        'fontWeight': '600',
-                        'fontSize': '14px',
-                        'textAlign': 'center',
-                        'padding': '8px',
-                        'borderRadius': '6px',
-                        'backgroundColor': f'{COLORS["light"]}'
-                    })
+            
+            html.Div([
+                html.Button('➕ 添加基金', 
+                           id={'type': 'add-fund-btn', 'portfolio_id': initial_portfolio_id}, 
+                           n_clicks=0, 
+                           style={**PRIMARY_BUTTON_STYLE, 'marginTop': '15px'}),
+                html.Div(id={'type': 'share-feedback', 'portfolio_id': initial_portfolio_id}, 
+                        style={
+                            'color': COLORS['danger'], 
+                            'marginTop': '15px', 
+                            'fontWeight': '600',
+                            'fontSize': '14px',
+                            'textAlign': 'center',
+                            'padding': '8px',
+                            'borderRadius': '6px',
+                            'backgroundColor': f'{COLORS["light"]}'
+                        })
+            ], style={'textAlign': 'center'})
         ], id={'type': 'portfolio-card', 'portfolio_id': initial_portfolio_id}, 
-           style=CARD_STYLE)
+           style={
+               'backgroundColor': COLORS['white'],
+               'borderRadius': '12px',
+               'padding': '24px',
+               'marginBottom': '20px',
+               'boxShadow': f'0 4px 12px {COLORS["shadow"]}',
+               'border': f'1px solid {COLORS["border"]}'
+           })
     ], style={'maxWidth': '1200px', 'margin': '0 auto', 'padding': '0 20px'}),
 
     # --- Chart Section ---
-    html.Div([
-        html.H2("📈 组合回测净值曲线", style={
-            'textAlign': 'center',
-            'color': COLORS['dark'],
-            'marginBottom': '20px',
-            'fontSize': '1.8rem',
-            'fontWeight': '600',
-            'fontFamily': '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif'
-        }),
-        html.Div([
-            html.Button(
-                '⏳ 生成图表',
-                id='generate-chart-btn',
-                n_clicks=0,
-                style={**PRIMARY_BUTTON_STYLE, 'marginBottom': '20px', 'marginRight': '15px'}
-            ),
-            html.Button(
-                '💾 保存当前数据',
-                id='save-data-btn',
-                n_clicks=0,
-                style={
-                    **BUTTON_STYLE,
-                    'backgroundColor': COLORS['success'],
-                    'color': COLORS['white'],
-                    'marginBottom': '20px',
-                    'marginRight': '15px'
-                }
-            ),
-            html.Button(
-                '📊 智能归一化',
-                id='normalize-chart-btn',
-                n_clicks=0,
-                style={
-                    **BUTTON_STYLE,
-                    'backgroundColor': COLORS['warning'],
-                    'color': COLORS['dark'],
-                    'marginBottom': '20px'
-                },
-                title='以最晚开始的组合时间为基准，重新归一化所有组合净值'
-            )
-        ], style={'textAlign': 'center'}),
-        html.Div(
-            id='save-status',
-            style={
-                'textAlign': 'center',
-                'marginBottom': '20px',
-                'fontSize': '14px',
-                'fontWeight': '600'
-            }
-        ),
-        html.Div(
-            id='graph-container',
-            children=[],
-            style={
-                'display': 'none',
-                'maxWidth': '1300px',
-                'margin': '0 auto',
-                'backgroundColor': COLORS['white'],
-                'borderRadius': '16px',
-                'boxShadow': f'0 4px 16px {COLORS["shadow"]}',
-                'padding': '32px 24px 24px 24px',
-            }
-        ),
-        
-        # --- Investment Analytics Section ---
-        html.Div(
-            id='analytics-section',
-            children=[],
-            style={
-                **CARD_STYLE,
-                'maxWidth': '1200px',
-                'margin': '32px auto 0 auto',
-                'marginLeft': 'auto',
-                'marginRight': 'auto',
-                'display': 'none',
-                'backgroundColor': COLORS['light'],
-                'boxShadow': f'0 2px 8px {COLORS["shadow"]}',
-                'padding': '28px 18px 18px 18px',
-            }
-        ),
-    ], style={
-        **CARD_STYLE,
-        'maxWidth': '1200px',
-        'margin': '30px auto 0 auto',
-        'marginLeft': 'auto',
-        'marginRight': 'auto'
-    }),
+    create_chart_section(),
 
 ], style={
     'fontFamily': '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif',
@@ -734,191 +115,6 @@ app.layout = html.Div([
     'minHeight': '100vh',
     'paddingBottom': '40px'
 })
-
-
-# --- UI Generation Functions ---
-def create_fund_entry(portfolio_id, fund_id):
-    """Creates the UI for a single fund entry."""
-    available_files = get_available_data_files()
-    available_scripts = get_available_scripts()
-    
-    data_source_options = (
-        [{'label': f'📁 {f}', 'value': f} for f in available_files] +
-        [{'label': f'🔧 脚本: {s}', 'value': f'script:{s}'} for s in available_scripts]
-    )
-    
-    return html.Div([
-        # 第一行：基金名称、份额、数据源
-        html.Div([
-            dcc.Input(
-                id={'type': 'fund-name', 'portfolio_id': portfolio_id, 'fund_id': fund_id},
-                placeholder='💼 条目名',
-                style={
-                    **INPUT_STYLE, 
-                    'width': '180px', 
-                    'marginRight': '8px'
-                }
-            ),
-            dcc.Input(
-                id={'type': 'fund-share', 'portfolio_id': portfolio_id, 'fund_id': fund_id},
-                type='number',
-                placeholder='📊 份额 (%)',
-                min=0,
-                max=100,
-                step=0.01,
-                style={
-                    **INPUT_STYLE, 
-                    'width': '150px', 
-                    'marginRight': '8px'
-                }
-            ),
-            html.Div([
-                dcc.Dropdown(
-                    id={'type': 'fund-data', 'portfolio_id': portfolio_id, 'fund_id': fund_id},
-                    options=data_source_options,
-                    placeholder='📂 选择数据源',
-                    style={**DROPDOWN_STYLE, 'width': '100%'},
-                    className='modern-dropdown'
-                )
-            ], style={
-                'flex': '1', 
-                'marginRight': '8px'
-            }),
-            html.Button('🗑️', 
-                       id={'type': 'remove-fund-btn', 'portfolio_id': portfolio_id, 'fund_id': fund_id}, 
-                       n_clicks=0, 
-                       title="删除此基金",
-                       style={
-                           **DANGER_BUTTON_STYLE,
-                           'width': '36px',
-                           'height': '36px',
-                           'borderRadius': '50%',
-                           'display': 'flex',
-                           'alignItems': 'center',
-                           'justifyContent': 'center',
-                           'fontSize': '14px',
-                           'flexShrink': '0'
-                       })
-        ], style={
-            'display': 'flex', 
-            'alignItems': 'center', 
-            'marginBottom': '8px'
-        }),
-        
-        # 第二行：可选参数（仅在选择脚本时显示）
-        html.Div([
-            dcc.Input(
-                id={'type': 'fund-code', 'portfolio_id': portfolio_id, 'fund_id': fund_id},
-                placeholder='🔢 可选参数',
-                style={
-                    **INPUT_STYLE, 
-                    'width': '200px',
-                    'marginRight': '8px',
-                    'display': 'none'  # 默认隐藏
-                }
-            ),
-            html.Span(
-                "填入基金代码或其他所需参数",
-                style={
-                    'fontSize': '12px',
-                    'color': COLORS['secondary'],
-                    'fontStyle': 'italic',
-                    'display': 'none'  # 默认隐藏
-                },
-                id={'type': 'param-hint', 'portfolio_id': portfolio_id, 'fund_id': fund_id}
-            ),
-            html.Div(
-                id={'type': 'script-status', 'portfolio_id': portfolio_id, 'fund_id': fund_id},
-                style={'marginLeft': '10px', 'fontSize': '12px', 'color': COLORS['secondary']}
-            )
-        ], style={'display': 'flex', 'alignItems': 'center'}, 
-           id={'type': 'fund-code-row', 'portfolio_id': portfolio_id, 'fund_id': fund_id})
-        
-    ], id=f"fund-entry-{fund_id}", style={
-        'marginBottom': '10px',
-        'padding': '12px',
-        'backgroundColor': COLORS['white'],
-        'borderRadius': '8px',
-        'border': f'1px solid {COLORS["border"]}',
-        'boxShadow': f'0 2px 4px {COLORS["shadow"]}',
-        'transition': 'transform 0.2s ease'
-    })
-
-def create_portfolio_card(portfolio_id, n_clicks):
-    """Creates the UI for a single portfolio card."""
-    initial_fund_id = str(uuid.uuid4())
-    
-    return html.Div([
-        html.Div([
-            html.Div([
-                html.Span("📈", style={'fontSize': '1.5rem', 'marginRight': '10px'}),
-                dcc.Input(
-                    id={'type': 'portfolio-name', 'portfolio_id': portfolio_id},
-                    value=f'投资组合 {n_clicks}' if portfolio_id != 'base-portfolio' else '基础组合',
-                    placeholder='组合名称',
-                    style={
-                        **INPUT_STYLE,
-                        'width': '250px',
-                        'fontWeight': '600',
-                        'fontSize': '16px',
-                        'marginRight': '15px',
-                        'border': f'2px solid {COLORS["secondary"]}'
-                    }
-                ),
-            ], style={'display': 'flex', 'alignItems': 'center', 'flex': '1'}),
-            html.Button('🗑️ 删除组合', 
-                       id={'type': 'remove-portfolio-btn', 'portfolio_id': portfolio_id}, 
-                       n_clicks=0,
-                       style={
-                           **DANGER_BUTTON_STYLE,
-                           'display': 'inline-flex',
-                           'alignItems': 'center',
-                           'gap': '5px'
-                       })
-        ], style={
-            'display': 'flex', 
-            'alignItems': 'center', 
-            'justifyContent': 'space-between',
-            'marginBottom': '20px',
-            'paddingBottom': '15px',
-            'borderBottom': f'2px solid {COLORS["border"]}'
-        }),
-        
-        html.Div([
-            html.H4('💰 基金配置', style={
-                'color': COLORS['dark'],
-                'marginBottom': '15px',
-                'fontSize': '1.1rem',
-                'fontWeight': '600'
-            }),
-            html.Div([create_fund_entry(portfolio_id, initial_fund_id)], 
-                    id={'type': 'funds-container', 'portfolio_id': portfolio_id})
-        ]),
-        
-        html.Div([
-            html.Button('➕ 添加基金', 
-                       id={'type': 'add-fund-btn', 'portfolio_id': portfolio_id}, 
-                       n_clicks=0, 
-                       style={**PRIMARY_BUTTON_STYLE, 'marginTop': '15px'}),
-            html.Div(id={'type': 'share-feedback', 'portfolio_id': portfolio_id}, 
-                    style={
-                        'color': COLORS['danger'], 
-                        'marginTop': '15px', 
-                        'fontWeight': '600',
-                        'fontSize': '14px',
-                        'textAlign': 'center',
-                        'padding': '8px',
-                        'borderRadius': '6px',
-                        'backgroundColor': f'{COLORS["light"]}'
-                    })
-        ], style={'textAlign': 'center'})
-        
-    ], id={'type': 'portfolio-card', 'portfolio_id': portfolio_id}, 
-       style={
-           **CARD_STYLE,
-           'position': 'relative',
-           'overflow': 'hidden'
-       })
 
 
 # --- Callbacks ---
@@ -1049,11 +245,19 @@ def save_data_to_csv(n_clicks, fund_names, fund_shares, fund_datas, fund_codes, 
 )
 def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fund_codes, portfolio_names):
     """智能归一化：以最晚开始的组合时间为基准，重新归一化所有组合净值"""
-    if n_clicks is None or n_clicks == 0:
-        return [], {'display': 'none'}, [], {'display': 'none'}
     
     import dash
     ctx = dash.callback_context
+    
+    # 强化检查逻辑，确保只有在按钮被明确点击时才执行
+    # 移除调试输出以避免Windows编码问题
+    
+    if n_clicks is None or n_clicks == 0:
+        return [], {'display': 'none'}, [], {'display': 'none'}
+    
+    # 额外检查：确保触发的是正确的按钮
+    if not ctx.triggered or ctx.triggered[0]['prop_id'] != 'normalize-chart-btn.n_clicks':
+        return [], {'display': 'none'}, [], {'display': 'none'}
     
     # Parse all inputs into a structured dictionary (复用现有逻辑)
     portfolios = {}
@@ -1148,7 +352,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
                         df.rename(columns={'nav': fund_id}, inplace=True)
                         fund_dfs.append({'df': df[[fund_id]], 'share': share})
                 except Exception as e:
-                    print(f"Error processing file {data_source}: {e}")
+                    safe_print("Error processing file {}: {}".format(data_source, str(e)))
                     continue
         
         if fund_dfs:
@@ -1171,7 +375,11 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
     if not portfolio_data or global_latest_start is None:
         return [], {'display': 'none'}
     
-    print(f"🎯 智能归一化：使用全局最晚开始时间 {global_latest_start.strftime('%Y-%m-%d')} 作为基准")
+    try:
+        start_date_str = global_latest_start.strftime('%Y-%m-%d')
+        safe_print("Smart normalization: Using latest start time {} as baseline".format(start_date_str))
+    except Exception as e:
+        safe_print("Smart normalization: Using latest start time as baseline (date formatting error: {})".format(str(e)))
     
     # 基于全局最晚开始时间重新处理所有组合
     traces = []
@@ -1213,18 +421,26 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
             
             if not nav.empty and nav.notna().any():
                 # 添加标记表示这是智能归一化的结果
-                chart_name = f"{portfolio_name} (归一化至 {global_latest_start.strftime('%Y-%m-%d')})"
+                try:
+                    date_str = global_latest_start.strftime('%Y-%m-%d')
+                    chart_name = f"{portfolio_name} (归一化至 {date_str})"
+                except Exception as e:
+                    chart_name = f"{portfolio_name} (归一化)"
                 traces.append(go.Scatter(
                     x=nav.index,
-                    y=nav,
+                    y=(nav - 1) * 100,  # 转换为百分比收益率
                     mode='lines',
                     name=chart_name,
-                    line=dict(dash='dot' if len(traces) % 2 == 1 else 'solid')  # 交替使用虚线和实线
+                    line=dict(dash='dot' if len(traces) % 2 == 1 else 'solid'),  # 交替使用虚线和实线
+                    hovertemplate='<b>%{fullData.name}</b><br>' +
+                                  '时间: %{x}<br>' +
+                                  '收益率: %{y:.2f}%<br>' +
+                                  '<extra></extra>'
                 ))
                 
                 # 保存净值数据用于投资分析
                 try:
-                    print(f"智能归一化保存组合净值数据: {portfolio_name}, 数据点: {len(nav)}")
+                    safe_print("Smart normalization saved portfolio nav data: {}, data points: {}".format(portfolio_name, len(nav)))
                 except Exception:
                     pass
                 portfolio_nav_data[portfolio_name] = nav
@@ -1235,7 +451,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
         layout=go.Layout(
             title='智能归一化组合对比 - 基于最晚开始时间',
             xaxis={'title': '时间'},
-            yaxis={'title': '组合净值 (智能归一化)'},
+            yaxis={'title': '收益率 (%)', 'tickformat': '.1f'},
             hovermode='x unified',
             template='plotly_white',
             legend_title_text='组合',
@@ -1252,7 +468,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
     analytics_data = []
     if portfolio_nav_data:
         try:
-            print(f"智能归一化：开始计算投资分析，共有 {len(portfolio_nav_data)} 个组合")
+            safe_print("Smart normalization: Starting investment analysis, portfolios:", len(portfolio_nav_data))
         except Exception:
             pass
         # 统一用所有组合净值序列的交集时间区间
@@ -1262,30 +478,32 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
             common_index = nav_series_list[0].index
             for s in nav_series_list[1:]:
                 common_index = common_index.intersection(s.index)
-            print(f"  统一分析区间: {common_index.min().strftime('%Y-%m-%d')} ~ {common_index.max().strftime('%Y-%m-%d')}, 共 {len(common_index)} 天")
+            start_str = common_index.min().strftime('%Y-%m-%d')
+            end_str = common_index.max().strftime('%Y-%m-%d')
+            safe_print("统一分析区间: {} ~ {}, 共 {} 天".format(start_str, end_str, len(common_index)))
             for portfolio_name, nav_series in portfolio_nav_data.items():
                 nav_common = nav_series.loc[common_index]
-                print(f"  计算归一化组合: {portfolio_name}, 数据点: {len(nav_common)}")
-                metrics = calculate_investment_metrics(nav_common, f"{portfolio_name} (归一化)")
+                safe_print("计算归一化组合: {}, 数据点: {}".format(portfolio_name, len(nav_common)))
+                metrics = calculate_investment_metrics(nav_common, "{} (归一化)".format(portfolio_name))
                 if metrics:
                     try:
-                        print(f"{portfolio_name} 归一化分析完成")
+                        safe_print("{} 归一化分析完成".format(portfolio_name))
                     except Exception:
                         pass
                     analytics_data.append(metrics)
                 else:
                     try:
-                        print(f"{portfolio_name} 归一化分析失败")
+                        safe_print("{} 归一化分析失败".format(portfolio_name))
                     except Exception:
                         pass
     else:
         try:
-            print("智能归一化：没有组合净值数据用于分析")
+            safe_print("Smart normalization: No portfolio nav data for analysis")
         except Exception:
             pass
     
     try:
-        print(f"智能归一化投资分析结果：{len(analytics_data)} 个组合")
+        safe_print("Smart normalization investment analysis results: {} portfolios".format(len(analytics_data)))
     except Exception:
         pass
     
@@ -1536,7 +754,7 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                 if data_source.startswith('script:'):
                     script_name = data_source[7:]
                     if fund_code:
-                        print(f"正在执行脚本 {script_name} 获取基金 {fund_code} 数据...")
+                        safe_print("正在执行脚本 {} 获取基金 {} 数据...".format(script_name, fund_code))
                         df = execute_custom_script(script_name, fund_code)
                         if df is not None and 'time' in df.columns:
                             df['time'] = pd.to_datetime(df['time'])
@@ -1546,14 +764,14 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                                 value_col = value_cols[0]
                                 df[value_col] = df[value_col] / df[value_col].iloc[0]
                                 df.rename(columns={value_col: fund_id}, inplace=True)
-                                fund_dfs.append({'df': df[[fund_id]], 'share': share or 0})
-                                print(f"脚本数据处理成功: {len(df)} 条记录")
+                                fund_dfs.append({'df': df[[fund_id]], 'share': share})
+                                safe_print("脚本数据处理成功: {} 条记录".format(len(df)))
                             else:
-                                print(f"脚本返回的数据中没有找到数值列")
+                                safe_print("脚本返回的数据中没有找到数值列")
                         else:
-                            print(f"脚本 {script_name} 执行失败或返回数据格式不正确")
+                            safe_print("脚本 {} 执行失败或返回数据格式不正确".format(script_name))
                     else:
-                        print(f"使用脚本 {script_name} 但未提供基金代码")
+                        safe_print("使用脚本 {} 但未提供基金代码".format(script_name))
                 elif os.path.exists(data_source):
                     try:
                         df = pd.read_csv(data_source)
@@ -1564,7 +782,7 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                                 df = df.set_index('time')
                                 df[value_col] = df[value_col] / df[value_col].iloc[0]
                                 df.rename(columns={value_col: fund_id}, inplace=True)
-                                fund_dfs.append({'df': df[[fund_id]], 'share': share or 0})
+                                fund_dfs.append({'df': df[[fund_id]], 'share': share})
                         elif 'FSRQ' in df.columns and 'DWJZ' in df.columns:
                             df = df.rename(columns={'FSRQ': 'time', 'DWJZ': 'nav'})
                             df['time'] = pd.to_datetime(df['time'])
@@ -1574,12 +792,12 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                             df = df.dropna()
                             df['nav'] = df['nav'] / df['nav'].iloc[0]
                             df.rename(columns={'nav': fund_id}, inplace=True)
-                            fund_dfs.append({'df': df[[fund_id]], 'share': share or 0})
+                            fund_dfs.append({'df': df[[fund_id]], 'share': share})
                     except Exception as e:
-                        print(f"Error processing file {data_source}: {e}")
+                        safe_print("Error processing file {}: {}".format(data_source, str(e)))
                         continue
         if round(total_share, 2) != 100 and total_share > 0:
-            feedback_messages[p_id] = f"份额总和为 {total_share}%, 不等于 100%！"
+            feedback_messages[p_id] = "份额总和为 {}%, 不等于 100%！".format(total_share)
         else:
             feedback_messages[p_id] = ""
         
@@ -1606,14 +824,18 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                     
                     traces.append(go.Scatter(
                         x=nav.index,
-                        y=nav,
+                        y=(nav - 1) * 100,  # 转换为百分比收益率
                         mode='lines',
-                        name=chart_name
+                        name=chart_name,
+                        hovertemplate='<b>%{fullData.name}</b><br>' +
+                                      '时间: %{x}<br>' +
+                                      '收益率: %{y:.2f}%<br>' +
+                                      '<extra></extra>'
                     ))
                     
                     # 保存净值数据用于投资分析
                     try:
-                        print(f"保存组合净值数据: {unique_portfolio_key}, 数据点: {len(nav)}")
+                        safe_print("保存组合净值数据: {}, 数据点: {}".format(unique_portfolio_key, len(nav)))
                     except Exception:
                         pass
                     portfolio_nav_data[unique_portfolio_key] = nav
@@ -1631,7 +853,7 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
         data=traces,
         layout=go.Layout(
             xaxis={'title': '时间'},
-            yaxis={'title': '组合净值 (归一化)'},
+            yaxis={'title': '收益率 (%)', 'tickformat': '.1f'},
             hovermode='x unified',
             template='plotly_white',
             legend_title_text='组合',
@@ -1648,43 +870,43 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
     # --- 4. Calculate investment analytics ---
     analytics_data = []
     try:
-        print(f"调试：portfolio_nav_data 包含 {len(portfolio_nav_data)} 个组合")
+        safe_print("调试：portfolio_nav_data 包含组合数:", len(portfolio_nav_data))
     except Exception:
         pass
     if portfolio_nav_data:
         try:
-            print(f"开始计算投资分析，共有 {len(portfolio_nav_data)} 个组合")
+            safe_print("开始计算投资分析，共有组合数:", len(portfolio_nav_data))
         except Exception:
             pass
         for unique_portfolio_key, nav_series in portfolio_nav_data.items():
             try:
-                print(f"计算组合: {unique_portfolio_key}, 数据点: {len(nav_series)}")
+                safe_print("计算组合: {}, 数据点: {}".format(unique_portfolio_key, len(nav_series)))
             except Exception:
                 pass
             metrics = calculate_investment_metrics(nav_series, unique_portfolio_key)
             if metrics:
                 try:
-                    print(f"{unique_portfolio_key} 分析完成")
+                    safe_print("{} 分析完成".format(unique_portfolio_key))
                 except Exception:
                     pass
                 analytics_data.append(metrics)
             else:
                 try:
-                    print(f"{unique_portfolio_key} 分析失败")
+                    safe_print("{} 分析失败".format(unique_portfolio_key))
                 except Exception:
                     pass
     else:
         try:
-            print("没有组合净值数据用于分析")
+            safe_print("没有组合净值数据用于分析")
         except Exception:
             pass
         try:
-            print(f"调试：portfolio_nav_data 详情: {portfolio_nav_data}")
+            safe_print("调试：portfolio_nav_data 详情:", str(portfolio_nav_data))
         except Exception:
             pass
     
     try:
-        print(f"投资分析结果：{len(analytics_data)} 个组合")
+        safe_print(f"投资分析结果：{len(analytics_data)} 个组合")
     except Exception:
         pass
     
@@ -1705,211 +927,24 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
 
 
 # --- Custom CSS Styles ---
-app.index_string = '''
+app.index_string = f'''
 <!DOCTYPE html>
 <html>
     <head>
-        {%metas%}
-        <title>{%title%}</title>
-        {%favicon%}
-        {%css%}
+        {{%metas%}}
+        <title>{{%title%}}</title>
+        {{%favicon%}}
+        {{%css%}}
         <style>
-            /* Custom dropdown styles - 优化垂直居中和clear按钮定位 */
-            .Select-control {
-                display: flex !important;
-                align-items: center !important;
-                border: 2px solid #E5E8E8 !important;
-                border-radius: 6px !important;
-                box-shadow: none !important;
-                transition: border-color 0.3s ease !important;
-                font-size: 14px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                height: 38px !important;
-                min-height: 38px !important;
-                box-sizing: border-box !important;
-                position: relative !important;
-            }
-            .Select-control:hover {
-                border-color: #2E86C1 !important;
-            }
-            .Select-control.is-focused {
-                border-color: #2E86C1 !important;
-                box-shadow: 0 0 0 3px rgba(46, 134, 193, 0.1) !important;
-            }
-            
-            /* 修复value区域的布局 */
-            .Select-value {
-                height: 100% !important;
-                display: flex !important;
-                align-items: center !important;
-                font-size: 16px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                padding: 8px 12px !important;
-                margin: 0 !important;
-                line-height: 18px !important;
-                flex: 1 !important;
-                padding-right: 60px !important; /* 为clear按钮和箭头留出空间 */
-            }
-            
-            .Select-placeholder,
-            .Select-input {
-                height: 100% !important;
-                display: flex !important;
-                align-items: center !important;
-                font-size: 15px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                padding: 8px 12px !important;
-                margin: 0 !important;
-                line-height: 18px !important;
-                flex: 1 !important;
-                padding-right: 60px !important; /* 为clear按钮和箭头留出空间 */
-            }
-            
-            .Select-value-label {
-                font-size: 15px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                color: #2C3E50 !important;
-                flex: 1 !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-                white-space: nowrap !important;
-            }
-            .Select-input > input {
-                font-size: 15px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                padding: 0 !important;
-                margin: 0 !important;
-                border: none !important;
-                outline: none !important;
-                background: transparent !important;
-                width: 100% !important;
-                line-height: 18px !important;
-            }
-            .Select-option {
-                display: flex !important;
-                align-items: center !important;
-                height: 38px !important;
-                font-size: 15px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                padding: 8px 12px !important;
-                line-height: 18px !important;
-            }
-            .Select-clear-zone {
-                width: 24px !important;
-                height: 24px !important;
-                position: absolute !important;
-                right: 32px !important; /* 在箭头左侧 */
-                top: 50% !important;
-                transform: translateY(-50%) !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                cursor: pointer !important;
-                z-index: 1 !important;
-            }
-            
-            .Select-clear {
-                font-size: 16px !important;
-                color: #7B7D7D !important;
-                line-height: 1 !important;
-                display: block !important;
-            }
-            
-            .Select-clear:hover {
-                color: #EC7063 !important;
-            }
-            
-            .Select-input > input {
-                font-size: 14px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                padding: 0 !important;
-                margin: 0 !important;
-                border: none !important;
-                outline: none !important;
-                background: transparent !important;
-                width: 100% !important;
-                line-height: 18px !important;
-            }
-            .Select-option {
-                display: flex !important;
-                align-items: center !important;
-                height: 38px !important;
-                font-size: 14px !important;
-                font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
-                padding: 8px 12px !important;
-                line-height: 18px !important;
-            }
-            
-            /* 箭头区域 */
-            .Select-arrow-zone {
-                width: 30px !important;
-                position: absolute !important;
-                right: 0 !important;
-                top: 0 !important;
-                height: 100% !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-            }
-            .Select-arrow {
-                border-color: #7B7D7D transparent transparent !important;
-                border-width: 5px 5px 0 !important;
-                border-style: solid !important;
-                display: block !important;
-            }
-            
-            /* Input focus effects */
-            input:focus {
-                border-color: #2E86C1 !important;
-                box-shadow: 0 0 0 3px rgba(46, 134, 193, 0.1) !important;
-            }
-            
-            /* Button hover effects */
-            button:hover {
-                transform: translateY(-2px) !important;
-                box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important;
-            }
-            
-            /* Card hover effects */
-            .portfolio-card:hover {
-                transform: translateY(-2px) !important;
-                box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
-            }
-            
-            /* Loading indicator */
-            ._dash-loading {
-                color: #2E86C1 !important;
-            }
-            
-            /* Plotly graph styling */
-            .js-plotly-plot .plotly .modebar {
-                background: rgba(248, 249, 250, 0.9) !important;
-                border-radius: 8px !important;
-                margin: 10px !important;
-            }
-            
-            /* Scrollbar styling */
-            ::-webkit-scrollbar {
-                width: 8px;
-            }
-            ::-webkit-scrollbar-track {
-                background: #F8F9FA;
-            }
-            ::-webkit-scrollbar-thumb {
-                background: #2E86C1;
-                border-radius: 4px;
-            }
-            ::-webkit-scrollbar-thumb:hover {
-                background: #5DADE2;
-            }
+            {CSS_STYLES}
         </style>
     </head>
     <body>
-        {%app_entry%}
+        {{%app_entry%}}
         <footer>
-            {%config%}
-            {%scripts%}
-            {%renderer%}
+            {{%config%}}
+            {{%scripts%}}
+            {{%renderer%}}
         </footer>
     </body>
 </html>
