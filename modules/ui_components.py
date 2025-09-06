@@ -13,6 +13,7 @@ from modules.data_handler import get_available_data_files, get_available_scripts
 
 def create_fund_entry(portfolio_id, fund_id):
     """创建单个基金条目的UI"""
+    # 每次创建时都重新获取最新的文件和脚本列表，确保包含最新保存的文件
     available_files = get_available_data_files()
     available_scripts = get_available_scripts()
     

@@ -68,12 +68,6 @@ def align_time_series_data(fund_dfs, portfolio_name):
                 # 截取到统一的时间区间
                 aligned_df = df[df.index >= latest_start]
                 if not aligned_df.empty:
-                    # 重新归一化（基于新的起始点）
-                    fund_id = aligned_df.columns[0]
-                    first_value = aligned_df[fund_id].iloc[0]
-                    if first_value != 0:
-                        aligned_df[fund_id] = aligned_df[fund_id] / first_value
-                    
                     aligned_fund_dfs.append({
                         'df': aligned_df,
                         'share': fund['share']
@@ -82,32 +76,78 @@ def align_time_series_data(fund_dfs, portfolio_name):
                     original_points = len(df)
                     aligned_points = len(aligned_df)
                     try:
+                        fund_id = aligned_df.columns[0]
                         safe_print("{}: {} -> {} 个数据点".format(fund_id, original_points, aligned_points))
                     except Exception:
                         pass
+        
+        # 在所有数据对齐后，统一进行归一化
+        normalized_fund_dfs = []
+        for fund in aligned_fund_dfs:
+            df = fund['df']
+            fund_id = df.columns[0]
+            
+            # 以对齐后的第一个值为基准进行归一化
+            first_value = df[fund_id].iloc[0]
+            if first_value != 0:
+                normalized_df = df.copy()
+                normalized_df.loc[:, fund_id] = normalized_df[fund_id] / first_value
+                normalized_fund_dfs.append({
+                    'df': normalized_df,
+                    'share': fund['share']
+                })
+            else:
+                # 如果第一个值为0，跳过这个基金
+                try:
+                    safe_print("跳过基金 {} (起始值为0)".format(fund_id))
+                except Exception:
+                    pass
         
         time_stats = {
             'aligned': True,
             'latest_start': latest_start,
             'earliest_end': earliest_end,
             'original_count': len(fund_dfs),
-            'aligned_count': len(aligned_fund_dfs)
+            'aligned_count': len(normalized_fund_dfs)
         }
         
-        return aligned_fund_dfs, time_stats
+        return normalized_fund_dfs, time_stats
     else:
         try:
             safe_print("组合 '{}' 时间区间已统一，无需对齐".format(portfolio_name))
         except Exception:
             pass
+        
+        # 即使不需要时间对齐，也需要进行归一化
+        normalized_fund_dfs = []
+        for fund in fund_dfs:
+            df = fund['df']
+            fund_id = df.columns[0]
+            
+            # 以第一个值为基准进行归一化
+            first_value = df[fund_id].iloc[0]
+            if first_value != 0:
+                normalized_df = df.copy()
+                normalized_df.loc[:, fund_id] = normalized_df[fund_id] / first_value
+                normalized_fund_dfs.append({
+                    'df': normalized_df,
+                    'share': fund['share']
+                })
+            else:
+                # 如果第一个值为0，跳过这个基金
+                try:
+                    safe_print("跳过基金 {} (起始值为0)".format(fund_id))
+                except Exception:
+                    pass
+        
         time_stats = {
             'aligned': False,
             'latest_start': latest_start,
             'earliest_end': earliest_end,
             'original_count': len(fund_dfs),
-            'aligned_count': len(fund_dfs)
+            'aligned_count': len(normalized_fund_dfs)
         }
-        return fund_dfs, time_stats
+        return normalized_fund_dfs, time_stats
 
 
 def calculate_investment_metrics(nav_series, portfolio_name):

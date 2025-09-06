@@ -92,11 +92,13 @@ def execute_custom_script(script_name, fund_code):
 def save_fund_data_individually(portfolios):
     """
     按条目分开保存基金数据到本地CSV文件，保存原始数据（未经时间对齐处理）
+    只保存来自脚本（DataFetcher）的数据，跳过本地文件数据源
     :param portfolios: 组合数据字典
     :return: 保存状态信息
     """
     saved_files = []
     errors = []
+    skipped_files = []  # 记录跳过的本地文件
     
     # 按条目遍历所有基金数据
     for p_id, p_data in portfolios.items():
@@ -126,12 +128,16 @@ def save_fund_data_individually(portfolios):
                     else:
                         continue
                         
-                # 处理CSV文件数据源 - 重新读取原始文件
+                # 跳过CSV文件数据源 - 本地数据不需要再次保存
                 elif os.path.exists(data_source):
-                    safe_print(f"正在复制原始数据：{fund_name} (来源: {data_source})")
-                    # 重新读取原始CSV文件，确保不受任何处理影响
-                    original_df = pd.read_csv(data_source)
-                    source_info = f"文件_{os.path.splitext(os.path.basename(data_source))[0]}"
+                    safe_print(f"跳过本地数据源：{fund_name} (来源: {data_source})")
+                    skipped_files.append({
+                        'fund_name': fund_name,
+                        'fund_code': fund_code or 'N/A',
+                        'source_file': os.path.basename(data_source),
+                        'reason': '数据来源已是本地文件'
+                    })
+                    continue  # 跳过本地文件数据源
                 
                 if original_df is not None and not original_df.empty:
                     # 生成文件名
@@ -186,4 +192,4 @@ def save_fund_data_individually(portfolios):
             except Exception as e:
                 errors.append(f"{fund_name} ({fund_code or 'N/A'}): {str(e)}")
     
-    return saved_files, errors
+    return saved_files, errors, skipped_files

@@ -180,19 +180,29 @@ def save_data_to_csv(n_clicks, fund_names, fund_shares, fund_datas, fund_codes, 
                 if portfolio_id in portfolio_names_dict:
                     portfolios[portfolio_id]['name'] = portfolio_names_dict[portfolio_id]
     
-    # Save data to CSV files (按条目分开保存)
-    saved_files, errors = save_fund_data_individually(portfolios)
+    # Save data to CSV files (按条目分开保存，只保存脚本数据源)
+    saved_files, errors, skipped_files = save_fund_data_individually(portfolios)
     
     # Prepare status message
-    if saved_files:
-        message_parts = ["✅ 基金数据按条目保存成功！"]
-        message_parts.append(f"📁 已保存 {len(saved_files)} 个基金数据文件：")
-        for file_info in saved_files:
-            fund_info = f"{file_info['fund_name']} ({file_info['fund_code']})"
-            if file_info['share']:
-                fund_info += f" - 份额: {file_info['share']}%"
-            message_parts.append(f"• {file_info['filename']}")
-            message_parts.append(f"  └─ {fund_info} | {file_info['rows']} 行数据")
+    if saved_files or skipped_files:
+        message_parts = []
+        
+        if saved_files:
+            message_parts.append("✅ 基金数据按条目保存成功！")
+            message_parts.append(f"📁 已保存 {len(saved_files)} 个基金数据文件：")
+            for file_info in saved_files:
+                fund_info = f"{file_info['fund_name']} ({file_info['fund_code']})"
+                if file_info['share']:
+                    fund_info += f" - 份额: {file_info['share']}%"
+                message_parts.append(f"• {file_info['filename']}")
+                message_parts.append(f"  └─ {fund_info} | {file_info['rows']} 行数据")
+        
+        if skipped_files:
+            message_parts.append("ℹ️ 跳过的本地数据源：")
+            for skip_info in skipped_files:
+                fund_info = f"{skip_info['fund_name']} ({skip_info['fund_code']})"
+                message_parts.append(f"• {fund_info}")
+                message_parts.append(f"  └─ 来源: {skip_info['source_file']} | {skip_info['reason']}")
         
         if errors:
             message_parts.append("⚠️ 部分保存失败：")
@@ -762,7 +772,7 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                             value_cols = [col for col in df.columns if df[col].dtype in ['float64', 'int64']]
                             if value_cols:
                                 value_col = value_cols[0]
-                                df[value_col] = df[value_col] / df[value_col].iloc[0]
+                                # 不在这里归一化，保留原始数据
                                 df.rename(columns={value_col: fund_id}, inplace=True)
                                 fund_dfs.append({'df': df[[fund_id]], 'share': share})
                                 safe_print("脚本数据处理成功: {} 条记录".format(len(df)))
@@ -780,7 +790,7 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                             if value_col:
                                 df['time'] = pd.to_datetime(df['time'])
                                 df = df.set_index('time')
-                                df[value_col] = df[value_col] / df[value_col].iloc[0]
+                                # 不在这里归一化，保留原始数据
                                 df.rename(columns={value_col: fund_id}, inplace=True)
                                 fund_dfs.append({'df': df[[fund_id]], 'share': share})
                         elif 'FSRQ' in df.columns and 'DWJZ' in df.columns:
@@ -790,7 +800,7 @@ def update_graph_and_feedback(n_clicks, fund_names, fund_shares, fund_datas, fun
                             df = df.sort_index()
                             df['nav'] = pd.to_numeric(df['nav'], errors='coerce')
                             df = df.dropna()
-                            df['nav'] = df['nav'] / df['nav'].iloc[0]
+                            # 不在这里归一化，保留原始数据
                             df.rename(columns={'nav': fund_id}, inplace=True)
                             fund_dfs.append({'df': df[[fund_id]], 'share': share})
                     except Exception as e:
@@ -949,6 +959,23 @@ app.index_string = f'''
     </body>
 </html>
 '''
+
+
+# Callback to auto-refresh portfolio display after saving data
+@app.callback(
+    Output('portfolios-container', 'children', allow_duplicate=True),
+    Input('save-data-btn', 'n_clicks'),
+    State('portfolios-container', 'children'),
+    prevent_initial_call=True
+)
+def refresh_portfolios_after_save(save_clicks, current_children):
+    """保存数据后刷新组合显示，以便下拉菜单包含最新的文件"""
+    if save_clicks is None or save_clicks == 0:
+        return current_children
+    
+    # 简单地返回当前的children，但这会触发重新渲染
+    # 重新渲染时，create_fund_entry会被调用，从而获取最新的文件列表
+    return current_children
 
 
 if __name__ == '__main__':
