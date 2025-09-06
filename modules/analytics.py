@@ -46,7 +46,7 @@ def align_time_series_data(fund_dfs, portfolio_name):
     if not time_info:
         return fund_dfs, None
     
-    # 找到最晚的开始时间
+    # 找到最晚的开始时间（组合内最晚发售的基金）
     latest_start = max(info['start_time'] for info in time_info)
     earliest_end = min(info['end_time'] for info in time_info)
     
@@ -56,16 +56,16 @@ def align_time_series_data(fund_dfs, portfolio_name):
     if needs_alignment:
         try:
             date_str = latest_start.strftime('%Y-%m-%d')
-            safe_print("组合 '{}' 检测到时间不统一，正在对齐到最晚开始时间: {}".format(portfolio_name, date_str))
+            safe_print("组合 '{}' 检测到时间不统一，正在对齐到组合内最晚发售基金的开始时间: {}".format(portfolio_name, date_str))
         except Exception:
             safe_print("组合检测到时间不统一，正在对齐")
         
-        # 对齐所有基金数据到统一时间区间
+        # 对齐所有基金数据到统一时间区间（从最晚发售的基金开始）
         aligned_fund_dfs = []
         for fund in fund_dfs:
             df = fund['df']
             if not df.empty:
-                # 截取到统一的时间区间
+                # 截取到统一的时间区间（从组合内最晚发售基金开始）
                 aligned_df = df[df.index >= latest_start]
                 if not aligned_df.empty:
                     aligned_fund_dfs.append({
@@ -77,7 +77,7 @@ def align_time_series_data(fund_dfs, portfolio_name):
                     aligned_points = len(aligned_df)
                     try:
                         fund_id = aligned_df.columns[0]
-                        safe_print("{}: {} -> {} 个数据点".format(fund_id, original_points, aligned_points))
+                        safe_print("{}: {} -> {} 个数据点 (对齐到 {})".format(fund_id, original_points, aligned_points, date_str))
                     except Exception:
                         pass
         

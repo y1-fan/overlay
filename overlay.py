@@ -318,6 +318,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
     for p_id, p_data in portfolios.items():
         portfolio_name = p_data.get('name')
         fund_dfs = []
+        fund_start_times = []  # 存储这个组合中每个基金的开始时间
         
         for fund_id, fund_data in p_data['funds'].items():
             share = fund_data.get('fund-share')
@@ -342,6 +343,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
                             # 不在这里归一化，稍后统一处理
                             df.rename(columns={value_col: fund_id}, inplace=True)
                             fund_dfs.append({'df': df[[fund_id]], 'share': share})
+                            fund_start_times.append(df.index.min())
             elif os.path.exists(data_source):
                 try:
                     df = pd.read_csv(data_source)
@@ -352,6 +354,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
                             df = df.set_index('time')
                             df.rename(columns={value_col: fund_id}, inplace=True)
                             fund_dfs.append({'df': df[[fund_id]], 'share': share})
+                            fund_start_times.append(df.index.min())
                     elif 'FSRQ' in df.columns and 'DWJZ' in df.columns:
                         df = df.rename(columns={'FSRQ': 'time', 'DWJZ': 'nav'})
                         df['time'] = pd.to_datetime(df['time'])
@@ -361,25 +364,24 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
                         df = df.dropna()
                         df.rename(columns={'nav': fund_id}, inplace=True)
                         fund_dfs.append({'df': df[[fund_id]], 'share': share})
+                        fund_start_times.append(df.index.min())
                 except Exception as e:
                     safe_print("Error processing file {}: {}".format(data_source, str(e)))
                     continue
         
-        if fund_dfs:
-            # 获取这个组合的时间范围
-            combined_df = pd.concat([f['df'] for f in fund_dfs], axis=1)
-            combined_df = combined_df.sort_index()
-            portfolio_start = combined_df.index.min()
+        if fund_dfs and fund_start_times:
+            # 在当前组合中找到最晚开始的基金时间（组合内最晚发售日）
+            portfolio_latest_start = max(fund_start_times)
             
-            # 更新全局最晚开始时间
-            if global_latest_start is None or portfolio_start > global_latest_start:
-                global_latest_start = portfolio_start
+            # 更新全局最晚开始时间（所有组合中最晚的那个）
+            if global_latest_start is None or portfolio_latest_start > global_latest_start:
+                global_latest_start = portfolio_latest_start
             
             portfolio_data.append({
                 'portfolio_id': p_id,
                 'portfolio_name': portfolio_name,
                 'fund_dfs': fund_dfs,
-                'start_time': portfolio_start
+                'portfolio_latest_start': portfolio_latest_start  # 这个组合内最晚发售的基金时间
             })
     
     if not portfolio_data or global_latest_start is None:
@@ -396,6 +398,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
     for pdata in portfolio_data:
         fund_dfs = pdata['fund_dfs']
         portfolio_name = pdata['portfolio_name']
+        portfolio_latest_start = pdata['portfolio_latest_start']
         
         # 截取到全局最晚开始时间并归一化
         normalized_fund_dfs = []
@@ -403,7 +406,7 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
             df = fund['df']
             fund_id = df.columns[0]
             
-            # 截取到全局最晚开始时间
+            # 截取到全局最晚开始时间（这样确保所有组合都能在同一起点开始对比）
             truncated_df = df[df.index >= global_latest_start]
             if not truncated_df.empty:
                 # 以全局最晚开始时间点的值为基准归一化
@@ -430,12 +433,18 @@ def generate_normalized_chart(n_clicks, fund_names, fund_shares, fund_datas, fun
                     nav += combined_df[fund_id] * (fund['share'] / 100.0)
             
             if not nav.empty and nav.notna().any():
-                # 添加标记表示这是智能归一化的结果
+                # 添加标记表示这是智能归一化的结果，同时显示该组合内的最晚发售日期
                 try:
-                    date_str = global_latest_start.strftime('%Y-%m-%d')
-                    chart_name = f"{portfolio_name} (归一化至 {date_str})"
+                    global_date_str = global_latest_start.strftime('%Y-%m-%d')
+                    portfolio_date_str = portfolio_latest_start.strftime('%Y-%m-%d')
+                    if portfolio_latest_start == global_latest_start:
+                        # 如果这个组合恰好包含全局最晚发售的基金
+                        chart_name = f"{portfolio_name} (智能归一化基准: {global_date_str})"
+                    else:
+                        # 否则显示组合内最晚发售日期和全局基准日期
+                        chart_name = f"{portfolio_name} (内部最晚: {portfolio_date_str}, 归一化至: {global_date_str})"
                 except Exception as e:
-                    chart_name = f"{portfolio_name} (归一化)"
+                    chart_name = f"{portfolio_name} (智能归一化)"
                 traces.append(go.Scatter(
                     x=nav.index,
                     y=(nav - 1) * 100,  # 转换为百分比收益率
